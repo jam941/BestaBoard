@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useMutation } from '@tanstack/react-query'
+import { useState } from 'react'
 import { toast } from 'sonner'
 import { api } from '#/lib/api'
 import { useSSEStatus } from '#/hooks/useSSEStatus'
@@ -15,6 +16,7 @@ export const Route = createFileRoute('/')({ component: StatusPage })
 
 function StatusPage() {
   const { data, error } = useSSEStatus()
+  const [previewText, setPreviewText] = useState<Record<string, string>>({})
 
   const pause = useMutation({
     mutationFn: api.pause,
@@ -51,6 +53,16 @@ function StatusPage() {
     onSuccess: (_data, modeID) => toast.success(`${modeID} disabled`),
     onError: () => toast.error('Failed to disable mode'),
   })
+  const previewMode = useMutation({
+    mutationFn: (modeID: string) => api.previewMode(modeID),
+    onSuccess: (result, modeID) =>
+      setPreviewText((prev) =>
+        prev[modeID] === result.text
+          ? { ...prev, [modeID]: '' } // toggle off if same
+          : { ...prev, [modeID]: result.text },
+      ),
+    onError: () => toast.error('Preview failed'),
+  })
 
   const busy =
     pause.isPending ||
@@ -59,7 +71,8 @@ function StatusPage() {
     unpin.isPending ||
     force.isPending ||
     enableMode.isPending ||
-    disableMode.isPending
+    disableMode.isPending ||
+    previewMode.isPending
 
   return (
     <main className="mx-auto max-w-lg px-4 py-10 space-y-4">
@@ -155,8 +168,8 @@ function StatusPage() {
                 const isCurrent = data.current_mode === m.id
                 const isPinned = data.pinned && isCurrent
                 return (
+                  <div key={m.id}>
                   <div
-                    key={m.id}
                     className="flex items-center justify-between gap-2 rounded-md border px-3 py-2"
                   >
                     <div className="flex items-center gap-2 min-w-0">
@@ -173,6 +186,13 @@ function StatusPage() {
                       )}
                     </div>
                     <div className="flex gap-1.5 shrink-0">
+                      <button
+                        onClick={() => previewMode.mutate(m.id)}
+                        disabled={busy}
+                        className="rounded border px-2.5 py-1 text-xs font-medium disabled:opacity-40 hover:bg-muted transition-colors"
+                      >
+                        {previewText[m.id] ? 'Hide' : 'Preview'}
+                      </button>
                       <button
                         onClick={() => force.mutate(m.id)}
                         disabled={busy || isPinned || !m.enabled}
@@ -198,6 +218,12 @@ function StatusPage() {
                         </button>
                       )}
                     </div>
+                  </div>
+                  {previewText[m.id] && (
+                    <pre className="mt-1 rounded bg-muted px-3 py-2 text-xs font-mono leading-relaxed whitespace-pre">
+                      {previewText[m.id]}
+                    </pre>
+                  )}
                   </div>
                 )
               })}

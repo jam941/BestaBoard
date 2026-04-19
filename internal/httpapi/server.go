@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"github.com/jam941/bestaboard/internal/hub"
+	"github.com/jam941/bestaboard/internal/mode"
 	"github.com/jam941/bestaboard/internal/scheduler"
 )
 
@@ -56,6 +57,7 @@ func New(sched *scheduler.Scheduler, authToken string, h *hub.Hub) *Server {
 		r.HandleFunc("/unpin", s.handleUnpin)
 		r.HandleFunc("/modes/{modeID}/enable", s.handleEnableMode)
 		r.HandleFunc("/modes/{modeID}/disable", s.handleDisableMode)
+		r.Get("/modes/{modeID}/preview", s.handlePreviewMode)
 	})
 
 	s.router = r
@@ -145,6 +147,24 @@ func (s *Server) handleDisableMode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "disabled", "mode": modeID})
+}
+
+func (s *Server) handlePreviewMode(w http.ResponseWriter, r *http.Request) {
+	modeID := chi.URLParam(r, "modeID")
+	m, ok := s.sched.GetMode(modeID)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "mode not found"})
+		return
+	}
+	layout, err := m.Render(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":   modeID,
+		"text": mode.LayoutToText(layout),
+	})
 }
 
 

@@ -40,4 +40,6 @@ export const api = {
     request<void>(`/modes/${modeID}/enable`, { method: 'POST' }),
   disableMode: (modeID: string) =>
     request<void>(`/modes/${modeID}/disable`, { method: 'POST' }),
+  previewMode: (modeID: string) =>
+    request<{ id: string; text: string }>(`/modes/${modeID}/preview`),
 }
