@@ -19,6 +19,7 @@ type Scheduler struct {
 	pusher   *board.Pusher
 	paused   bool
 	pinned   bool // when true, only the current mode is shown; no rotation
+	resetCh chan struct{}
 }
 
 func New(modes []mode.Mode, interval time.Duration, pusher *board.Pusher) *Scheduler {
@@ -26,6 +27,7 @@ func New(modes []mode.Mode, interval time.Duration, pusher *board.Pusher) *Sched
 		modes:    modes,
 		interval: interval,
 		pusher:   pusher,
+		resetCh:  make(chan struct{}, 1),
 	}
 }
 
@@ -42,6 +44,8 @@ func (s *Scheduler) Start(ctx context.Context) {
 		case <-ctx.Done():
 			slog.Info("scheduler shutting down")
 			return
+		case <-s.resetCh:
+			ticker.Reset(s.interval)
 		case <-ticker.C:
 			s.tick(ctx)
 		}
@@ -115,30 +119,41 @@ func (s *Scheduler) Resume() {
 }
 
 func (s *Scheduler) Skip(ctx context.Context) {
+	slog.Info("skip: received")
 	s.mu.Lock()
 	if s.paused {
+		slog.Info("skip: ignored — scheduler is paused")
 		s.mu.Unlock()
 		return
 	}
 	s.advance()
 	m := s.currentMode()
+	slog.Info("skip: advanced to mode", "mode", m.ID())
 	s.mu.Unlock()
 
 	if m == nil {
+		slog.Warn("skip: no modes registered")
 		return
 	}
 
+	slog.Info("skip: rendering mode", "mode", m.ID())
 	layout, err := m.Render(ctx)
 	if err != nil {
-		if !errors.Is(err, mode.ErrNoContent) {
-			slog.Error("skip render failed", "mode", m.ID(), "error", err)
+		if errors.Is(err, mode.ErrNoContent) {
+			slog.Info("skip: mode returned no content", "mode", m.ID())
+		} else {
+			slog.Error("skip: render failed", "mode", m.ID(), "error", err)
 		}
 		return
 	}
-	slog.Info("skip: pushing mode", "mode", m.ID())
+
+	slog.Info("skip: sending to pusher", "mode", m.ID())
 	if err := s.pusher.Push(ctx, layout); err != nil && !errors.Is(err, context.Canceled) {
-		slog.Error("skip push failed", "error", err)
+		slog.Error("skip: push failed", "error", err)
+		return
 	}
+	slog.Info("skip: done, resetting interval")
+	s.resetInterval()
 }
 
 func (s *Scheduler) ForceMode(ctx context.Context, id string) bool {
@@ -167,8 +182,19 @@ func (s *Scheduler) ForceMode(ctx context.Context, id string) bool {
 	slog.Info("force: pushing mode", "mode", id)
 	if err := s.pusher.Push(ctx, layout); err != nil && !errors.Is(err, context.Canceled) {
 		slog.Error("force push failed", "error", err)
+		return true
 	}
+	s.resetInterval()
 	return true
+}
+
+// resetInterval signals Start to reset the ticker. Non-blocking — if a reset
+// is already pending it's a no-op (channel is buffered size 1).
+func (s *Scheduler) resetInterval() {
+	select {
+	case s.resetCh <- struct{}{}:
+	default:
+	}
 }
 
 func (s *Scheduler) Unpin() {
