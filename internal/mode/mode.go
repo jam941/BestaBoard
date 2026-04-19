@@ -21,8 +21,10 @@ func CharFor(r rune) int {
 		return int(r-'A') + vestaboard.CharA
 	case r >= 'a' && r <= 'z':
 		return int(r-'a') + vestaboard.CharA
-	case r >= '0' && r <= '9':
-		return int(r-'0') + vestaboard.Char0
+	case r == '0':
+		return vestaboard.Char0
+	case r >= '1' && r <= '9':
+		return int(r-'1') + vestaboard.Char1
 	case r == ' ':
 		return vestaboard.CharSpace
 	case r == '!':
@@ -64,7 +66,7 @@ func CharFor(r rune) int {
 	case r == '?':
 		return vestaboard.CharQuestion
 	case r == '°':
-		return vestaboard.CharDegree
+		return vestaboard.CharHeart // closest available; no degree in v0.2.0
 	default:
 		return vestaboard.CharSpace
 	}
