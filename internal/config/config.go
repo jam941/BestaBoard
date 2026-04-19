@@ -36,15 +36,16 @@ func Load() (*Config, error) {
 		path = defaultConfigPath
 	}
 
+	cfg := defaults()
+
 	data, err := os.ReadFile(path)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return cfg, nil
+		}
 		return nil, fmt.Errorf("read config %q: %w", path, err)
 	}
 
-	cfg := &Config{
-		RotationInterval: Duration{5 * time.Minute},
-		StaticText:       "HELLO WORLD",
-	}
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parse config %q: %w", path, err)
 	}
@@ -54,4 +55,11 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func defaults() *Config {
+	return &Config{
+		RotationInterval: Duration{5 * time.Minute},
+		StaticText:       "HELLO WORLD",
+	}
 }
