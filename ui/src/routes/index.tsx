@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation } from '@tanstack/react-query'
 import { api } from '#/lib/api'
+import { useSSEStatus } from '#/hooks/useSSEStatus'
 import { Badge } from '#/components/ui/badge'
 import {
   Card,
@@ -12,25 +13,14 @@ import {
 export const Route = createFileRoute('/')({ component: StatusPage })
 
 function StatusPage() {
-  const queryClient = useQueryClient()
+  const { data, connected, error } = useSSEStatus()
 
-  const { data, isError, isPending } = useQuery({
-    queryKey: ['status'],
-    queryFn: api.status,
-    refetchInterval: (query) => (query.state.status === 'error' ? false : 10_000),
-    refetchIntervalInBackground: false,
-    retry: 1,
-  })
-
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['status'] })
-
-  const pause = useMutation({ mutationFn: api.pause, onSuccess: invalidate })
-  const resume = useMutation({ mutationFn: api.resume, onSuccess: invalidate })
-  const skip = useMutation({ mutationFn: api.skip, onSuccess: invalidate })
-  const unpin = useMutation({ mutationFn: api.unpin, onSuccess: invalidate })
+  const pause = useMutation({ mutationFn: api.pause })
+  const resume = useMutation({ mutationFn: api.resume })
+  const skip = useMutation({ mutationFn: api.skip })
+  const unpin = useMutation({ mutationFn: api.unpin })
   const force = useMutation({
     mutationFn: (modeID: string) => api.force(modeID),
-    onSuccess: invalidate,
   })
 
   const busy =
@@ -44,11 +34,13 @@ function StatusPage() {
     <main className="mx-auto max-w-lg px-4 py-10 space-y-4">
       <h1 className="text-2xl font-bold">Bestaboard</h1>
 
-      {isPending && <p className="text-muted-foreground text-sm">Loading…</p>}
+      {!connected && !error && !data && (
+        <p className="text-muted-foreground text-sm">Connecting…</p>
+      )}
 
-      {isError && (
+      {error && (
         <div className="rounded-md bg-destructive/10 px-4 py-3 text-sm text-destructive">
-          Could not reach the board service. Is the backend running?
+          Lost connection to board service — reconnecting…
         </div>
       )}
 
@@ -118,7 +110,7 @@ function StatusPage() {
                     <button
                       key={id}
                       onClick={() => force.mutate(id)}
-                      disabled={busy || data.pinned && data.current_mode === id}
+                      disabled={busy || (data.pinned && data.current_mode === id)}
                       className="rounded-md border px-3 py-1.5 text-sm font-medium disabled:opacity-40 hover:bg-muted transition-colors"
                     >
                       {id}

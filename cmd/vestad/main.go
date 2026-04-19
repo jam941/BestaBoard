@@ -12,6 +12,7 @@ import (
 	"github.com/jam941/Vestaboard-Golang/vestaboard"
 	"github.com/jam941/bestaboard/internal/board"
 	"github.com/jam941/bestaboard/internal/config"
+	"github.com/jam941/bestaboard/internal/hub"
 	"github.com/jam941/bestaboard/internal/httpapi"
 	"github.com/jam941/bestaboard/internal/mode"
 	"github.com/jam941/bestaboard/internal/scheduler"
@@ -46,15 +47,17 @@ func main() {
 
 	pusher := board.NewPusher(client)
 
+	h := hub.New()
+
 	modes := []mode.Mode{
 		mode.NewClockMode(),
 		mode.NewStaticMode(cfg.StaticText),
 	}
 
-	sched := scheduler.New(modes, cfg.RotationInterval.Duration, pusher)
+	sched := scheduler.New(modes, cfg.RotationInterval.Duration, pusher, h)
 
 	// HTTP server — runs alongside the scheduler.
-	apiServer := httpapi.New(sched, authToken)
+	apiServer := httpapi.New(sched, authToken, h)
 	httpServer := &http.Server{
 		Addr:    ":8080",
 		Handler: apiServer.Handler(),

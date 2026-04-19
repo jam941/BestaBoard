@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -9,18 +10,21 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"github.com/jam941/bestaboard/internal/hub"
 	"github.com/jam941/bestaboard/internal/scheduler"
 )
 
 type Server struct {
 	router    *chi.Mux
 	sched     *scheduler.Scheduler
+	hub       *hub.Hub
 	authToken string
 }
 
-func New(sched *scheduler.Scheduler, authToken string) *Server {
+func New(sched *scheduler.Scheduler, authToken string, h *hub.Hub) *Server {
 	s := &Server{
 		sched:     sched,
+		hub:       h,
 		authToken: authToken,
 	}
 
@@ -39,6 +43,7 @@ func New(sched *scheduler.Scheduler, authToken string) *Server {
 
 	// Public — no auth.
 	r.Get("/health", s.handleHealth)
+	r.Get("/events", s.handleEvents) // SSE stream — read-only, no auth needed
 
 	// Protected — bearer token required.
 	r.Group(func(r chi.Router) {
@@ -122,6 +127,45 @@ func (s *Server) handleUnpin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "unpinned"})
 }
 
+
+// handleEvents streams Server-Sent Events to the client. It sends the
+// current status immediately on connect, then pushes an event whenever the
+// scheduler broadcasts a state change. The endpoint is intentionally public
+// (read-only status data) so EventSource can connect without custom headers.
+func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no") // disable nginx/proxy buffering
+
+	// Send the current state immediately so the client doesn't wait.
+	if data, err := json.Marshal(s.sched.Status()); err == nil {
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+	}
+
+	ch := s.hub.Subscribe()
+	defer s.hub.Unsubscribe(ch)
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case data, ok := <-ch:
+			if !ok {
+				return
+			}
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		}
+	}
+}
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")

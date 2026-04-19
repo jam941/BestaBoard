@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jam941/bestaboard/internal/board"
+	"github.com/jam941/bestaboard/internal/hub"
 	"github.com/jam941/bestaboard/internal/mode"
 )
 
@@ -17,16 +18,18 @@ type Scheduler struct {
 	index    int
 	interval time.Duration
 	pusher   *board.Pusher
+	hub      *hub.Hub
 	paused   bool
 	pinned   bool // when true, only the current mode is shown; no rotation
-	resetCh chan struct{}
+	resetCh  chan struct{}
 }
 
-func New(modes []mode.Mode, interval time.Duration, pusher *board.Pusher) *Scheduler {
+func New(modes []mode.Mode, interval time.Duration, pusher *board.Pusher, h *hub.Hub) *Scheduler {
 	return &Scheduler{
 		modes:    modes,
 		interval: interval,
 		pusher:   pusher,
+		hub:      h,
 		resetCh:  make(chan struct{}, 1),
 	}
 }
@@ -87,7 +90,9 @@ func (s *Scheduler) tick(ctx context.Context) {
 		if !errors.Is(err, context.Canceled) {
 			slog.Error("pusher push failed", "error", err)
 		}
+		return
 	}
+	s.broadcast()
 }
 
 func (s *Scheduler) advance() {
@@ -106,16 +111,18 @@ func (s *Scheduler) currentMode() mode.Mode {
 
 func (s *Scheduler) Pause() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.paused = true
+	s.mu.Unlock()
 	slog.Info("scheduler paused")
+	s.broadcast()
 }
 
 func (s *Scheduler) Resume() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.paused = false
+	s.mu.Unlock()
 	slog.Info("scheduler resumed")
+	s.broadcast()
 }
 
 func (s *Scheduler) Skip(ctx context.Context) {
@@ -153,6 +160,7 @@ func (s *Scheduler) Skip(ctx context.Context) {
 		return
 	}
 	slog.Info("skip: done, resetting interval")
+	s.broadcast()
 	s.resetInterval()
 }
 
@@ -184,6 +192,7 @@ func (s *Scheduler) ForceMode(ctx context.Context, id string) bool {
 		slog.Error("force push failed", "error", err)
 		return true
 	}
+	s.broadcast()
 	s.resetInterval()
 	return true
 }
@@ -199,9 +208,19 @@ func (s *Scheduler) resetInterval() {
 
 func (s *Scheduler) Unpin() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.pinned = false
+	s.mu.Unlock()
 	slog.Info("scheduler unpinned")
+	s.broadcast()
+}
+
+// broadcast sends the current status to all SSE subscribers.
+// Safe to call with or without the mutex held (reads its own lock internally).
+func (s *Scheduler) broadcast() {
+	if s.hub == nil {
+		return
+	}
+	s.hub.Broadcast(s.Status())
 }
 
 type Status struct {
