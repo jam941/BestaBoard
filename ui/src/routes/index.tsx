@@ -14,7 +14,7 @@ import {
 export const Route = createFileRoute('/')({ component: StatusPage })
 
 function StatusPage() {
-  const { data, connected, error } = useSSEStatus()
+  const { data, error } = useSSEStatus()
 
   const pause = useMutation({
     mutationFn: api.pause,
@@ -41,19 +41,31 @@ function StatusPage() {
     onSuccess: (_data, modeID) => toast.success(`Pinned to ${modeID}`),
     onError: () => toast.error('Failed to force mode'),
   })
+  const enableMode = useMutation({
+    mutationFn: (modeID: string) => api.enableMode(modeID),
+    onSuccess: (_data, modeID) => toast.success(`${modeID} enabled`),
+    onError: () => toast.error('Failed to enable mode'),
+  })
+  const disableMode = useMutation({
+    mutationFn: (modeID: string) => api.disableMode(modeID),
+    onSuccess: (_data, modeID) => toast.success(`${modeID} disabled`),
+    onError: () => toast.error('Failed to disable mode'),
+  })
 
   const busy =
     pause.isPending ||
     resume.isPending ||
     skip.isPending ||
     unpin.isPending ||
-    force.isPending
+    force.isPending ||
+    enableMode.isPending ||
+    disableMode.isPending
 
   return (
     <main className="mx-auto max-w-lg px-4 py-10 space-y-4">
       <h1 className="text-2xl font-bold">Bestaboard</h1>
 
-      {!connected && !error && !data && (
+      {!data && !error && (
         <p className="text-muted-foreground text-sm">Connecting…</p>
       )}
 
@@ -65,6 +77,7 @@ function StatusPage() {
 
       {data && (
         <>
+          {/* Status */}
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Status</CardTitle>
@@ -89,12 +102,12 @@ function StatusPage() {
             </CardContent>
           </Card>
 
+          {/* Controls */}
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Controls</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
-              {/* Pause / Resume */}
               <div className="flex gap-2">
                 <button
                   onClick={() => pause.mutate()}
@@ -112,7 +125,6 @@ function StatusPage() {
                 </button>
               </div>
 
-              {/* Skip */}
               <button
                 onClick={() => skip.mutate()}
                 disabled={busy || data.paused}
@@ -121,24 +133,6 @@ function StatusPage() {
                 Skip to next
               </button>
 
-              {/* Force mode */}
-              <div className="space-y-1">
-                <p className="text-xs text-muted-foreground">Force a mode</p>
-                <div className="flex flex-wrap gap-2">
-                  {data.mode_ids.map((id) => (
-                    <button
-                      key={id}
-                      onClick={() => force.mutate(id)}
-                      disabled={busy || (data.pinned && data.current_mode === id)}
-                      className="rounded-md border px-3 py-1.5 text-sm font-medium disabled:opacity-40 hover:bg-muted transition-colors"
-                    >
-                      {id}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Unpin */}
               {data.pinned && (
                 <button
                   onClick={() => unpin.mutate()}
@@ -148,6 +142,65 @@ function StatusPage() {
                   Unpin (resume rotation)
                 </button>
               )}
+            </CardContent>
+          </Card>
+
+          {/* Modes */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Modes</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {data.modes.map((m) => {
+                const isCurrent = data.current_mode === m.id
+                const isPinned = data.pinned && isCurrent
+                return (
+                  <div
+                    key={m.id}
+                    className="flex items-center justify-between gap-2 rounded-md border px-3 py-2"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-sm font-medium truncate">{m.id}</span>
+                      {isCurrent && (
+                        <Badge variant="outline" className="shrink-0 text-xs">
+                          {data.pinned ? 'pinned' : 'active'}
+                        </Badge>
+                      )}
+                      {!m.enabled && (
+                        <Badge variant="secondary" className="shrink-0 text-xs">
+                          off
+                        </Badge>
+                      )}
+                    </div>
+                    <div className="flex gap-1.5 shrink-0">
+                      <button
+                        onClick={() => force.mutate(m.id)}
+                        disabled={busy || isPinned || !m.enabled}
+                        className="rounded border px-2.5 py-1 text-xs font-medium disabled:opacity-40 hover:bg-muted transition-colors"
+                      >
+                        Force
+                      </button>
+                      {m.enabled ? (
+                        <button
+                          onClick={() => disableMode.mutate(m.id)}
+                          disabled={busy}
+                          className="rounded border px-2.5 py-1 text-xs font-medium disabled:opacity-40 hover:bg-muted transition-colors"
+                        >
+                          Disable
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => enableMode.mutate(m.id)}
+                          disabled={busy}
+                          className="rounded border px-2.5 py-1 text-xs font-medium disabled:opacity-40 hover:bg-muted transition-colors"
+                        >
+                          Enable
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
             </CardContent>
           </Card>
         </>

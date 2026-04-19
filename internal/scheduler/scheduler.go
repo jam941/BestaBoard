@@ -15,6 +15,7 @@ import (
 type Scheduler struct {
 	mu       sync.Mutex
 	modes    []mode.Mode
+	enabled  map[string]bool
 	index    int
 	interval time.Duration
 	pusher   *board.Pusher
@@ -25,8 +26,13 @@ type Scheduler struct {
 }
 
 func New(modes []mode.Mode, interval time.Duration, pusher *board.Pusher, h *hub.Hub) *Scheduler {
+	enabled := make(map[string]bool, len(modes))
+	for _, m := range modes {
+		enabled[m.ID()] = true
+	}
 	return &Scheduler{
 		modes:    modes,
+		enabled:  enabled,
 		interval: interval,
 		pusher:   pusher,
 		hub:      h,
@@ -39,7 +45,7 @@ func (s *Scheduler) Start(ctx context.Context) {
 
 	s.tick(ctx)
 
-	ticker := time.NewTicker(s.interval)
+	ticker := time.NewTicker(s.currentDuration())
 	defer ticker.Stop()
 
 	for {
@@ -48,9 +54,10 @@ func (s *Scheduler) Start(ctx context.Context) {
 			slog.Info("scheduler shutting down")
 			return
 		case <-s.resetCh:
-			ticker.Reset(s.interval)
+			ticker.Reset(s.currentDuration())
 		case <-ticker.C:
 			s.tick(ctx)
+			ticker.Reset(s.currentDuration())
 		}
 	}
 }
@@ -68,6 +75,11 @@ func (s *Scheduler) tick(ctx context.Context) {
 	}
 
 	m := s.currentMode()
+	if m != nil && !s.enabled[m.ID()] {
+		s.mu.Unlock()
+		slog.Debug("current mode disabled, skipping tick", "mode", m.ID())
+		return
+	}
 	s.mu.Unlock()
 
 	if m == nil {
@@ -95,18 +107,47 @@ func (s *Scheduler) tick(ctx context.Context) {
 	s.broadcast()
 }
 
+// advance moves to the next enabled mode. If all modes are disabled it stays
+// on the current index. Must be called with s.mu held.
 func (s *Scheduler) advance() {
-	if len(s.modes) == 0 {
+	n := len(s.modes)
+	if n == 0 {
 		return
 	}
-	s.index = (s.index + 1) % len(s.modes)
+	for i := 1; i <= n; i++ {
+		next := (s.index + i) % n
+		if s.enabled[s.modes[next].ID()] {
+			s.index = next
+			return
+		}
+	}
+	// All modes disabled — stay put.
 }
 
+// currentMode returns the mode at the current index. Must be called with s.mu held.
 func (s *Scheduler) currentMode() mode.Mode {
 	if len(s.modes) == 0 {
 		return nil
 	}
 	return s.modes[s.index]
+}
+
+// currentDuration returns the rotation duration for the current mode.
+// If the mode implements DurationProvider and returns a non-zero value,
+// that is used; otherwise the global interval is returned.
+func (s *Scheduler) currentDuration() time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.modes) == 0 {
+		return s.interval
+	}
+	m := s.modes[s.index]
+	if dp, ok := m.(mode.DurationProvider); ok {
+		if d := dp.Duration(); d > 0 {
+			return d
+		}
+	}
+	return s.interval
 }
 
 func (s *Scheduler) Pause() {
@@ -197,6 +238,48 @@ func (s *Scheduler) ForceMode(ctx context.Context, id string) bool {
 	return true
 }
 
+// EnableMode enables a mode by ID. Returns false if the ID is not found.
+func (s *Scheduler) EnableMode(id string) bool {
+	s.mu.Lock()
+	found := false
+	for _, m := range s.modes {
+		if m.ID() == id {
+			found = true
+			break
+		}
+	}
+	if found {
+		s.enabled[id] = true
+	}
+	s.mu.Unlock()
+	if found {
+		slog.Info("mode enabled", "mode", id)
+		s.broadcast()
+	}
+	return found
+}
+
+// DisableMode disables a mode by ID. Returns false if the ID is not found.
+func (s *Scheduler) DisableMode(id string) bool {
+	s.mu.Lock()
+	found := false
+	for _, m := range s.modes {
+		if m.ID() == id {
+			found = true
+			break
+		}
+	}
+	if found {
+		s.enabled[id] = false
+	}
+	s.mu.Unlock()
+	if found {
+		slog.Info("mode disabled", "mode", id)
+		s.broadcast()
+	}
+	return found
+}
+
 // resetInterval signals Start to reset the ticker. Non-blocking — if a reset
 // is already pending it's a no-op (channel is buffered size 1).
 func (s *Scheduler) resetInterval() {
@@ -223,20 +306,29 @@ func (s *Scheduler) broadcast() {
 	s.hub.Broadcast(s.Status())
 }
 
+// ModeInfo describes a single registered mode and its runtime enabled state.
+type ModeInfo struct {
+	ID      string `json:"id"`
+	Enabled bool   `json:"enabled"`
+}
+
 type Status struct {
-	CurrentMode string   `json:"current_mode"`
-	Paused      bool     `json:"paused"`
-	Pinned      bool     `json:"pinned"`
-	ModeIDs     []string `json:"mode_ids"`
+	CurrentMode string     `json:"current_mode"`
+	Paused      bool       `json:"paused"`
+	Pinned      bool       `json:"pinned"`
+	Modes       []ModeInfo `json:"modes"`
 }
 
 func (s *Scheduler) Status() Status {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	ids := make([]string, len(s.modes))
+	modes := make([]ModeInfo, len(s.modes))
 	for i, m := range s.modes {
-		ids[i] = m.ID()
+		modes[i] = ModeInfo{
+			ID:      m.ID(),
+			Enabled: s.enabled[m.ID()],
+		}
 	}
 
 	current := ""
@@ -248,6 +340,6 @@ func (s *Scheduler) Status() Status {
 		CurrentMode: current,
 		Paused:      s.paused,
 		Pinned:      s.pinned,
-		ModeIDs:     ids,
+		Modes:       modes,
 	}
 }

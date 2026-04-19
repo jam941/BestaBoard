@@ -16,11 +16,16 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
+export type ModeInfo = {
+  id: string
+  enabled: boolean
+}
+
 export type Status = {
   current_mode: string
   paused: boolean
   pinned: boolean
-  mode_ids: string[]
+  modes: ModeInfo[]
 }
 
 export const api = {
@@ -31,4 +36,8 @@ export const api = {
   force: (modeID: string) =>
     request<void>(`/force/${modeID}`, { method: 'POST' }),
   unpin: () => request<void>('/unpin', { method: 'POST' }),
+  enableMode: (modeID: string) =>
+    request<void>(`/modes/${modeID}/enable`, { method: 'POST' }),
+  disableMode: (modeID: string) =>
+    request<void>(`/modes/${modeID}/disable`, { method: 'POST' }),
 }

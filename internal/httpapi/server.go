@@ -54,6 +54,8 @@ func New(sched *scheduler.Scheduler, authToken string, h *hub.Hub) *Server {
 		r.HandleFunc("/skip", s.handleSkip)
 		r.HandleFunc("/force/{modeID}", s.handleForce)
 		r.HandleFunc("/unpin", s.handleUnpin)
+		r.HandleFunc("/modes/{modeID}/enable", s.handleEnableMode)
+		r.HandleFunc("/modes/{modeID}/disable", s.handleDisableMode)
 	})
 
 	s.router = r
@@ -125,6 +127,24 @@ func (s *Server) handleForce(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUnpin(w http.ResponseWriter, r *http.Request) {
 	s.sched.Unpin()
 	writeJSON(w, http.StatusOK, map[string]string{"status": "unpinned"})
+}
+
+func (s *Server) handleEnableMode(w http.ResponseWriter, r *http.Request) {
+	modeID := chi.URLParam(r, "modeID")
+	if !s.sched.EnableMode(modeID) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "mode not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "enabled", "mode": modeID})
+}
+
+func (s *Server) handleDisableMode(w http.ResponseWriter, r *http.Request) {
+	modeID := chi.URLParam(r, "modeID")
+	if !s.sched.DisableMode(modeID) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "mode not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "disabled", "mode": modeID})
 }
 
 

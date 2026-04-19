@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { type Status } from '#/lib/api'
+export type { Status }
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? ''
 

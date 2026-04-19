@@ -3,6 +3,7 @@ package mode
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jam941/Vestaboard-Golang/vestaboard"
 )
@@ -13,6 +14,11 @@ var ErrNoContent = errors.New("no content")
 type Mode interface {
 	ID() string
 	Render(ctx context.Context) (vestaboard.BoardLayout, error)
+}
+
+
+type DurationProvider interface {
+	Duration() time.Duration
 }
 
 func CharFor(r rune) int {
