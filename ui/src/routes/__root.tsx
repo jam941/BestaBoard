@@ -4,6 +4,7 @@ import {
   createRootRouteWithContext,
 } from '@tanstack/react-router'
 import Header from '../components/Header'
+import { Toaster } from '../components/ui/sonner'
 import appCss from '../styles.css?url'
 import type { QueryClient } from '@tanstack/react-query'
 
@@ -32,6 +33,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
       <body className="font-sans antialiased">
         <Header />
         {children}
+        <Toaster position="bottom-right" richColors />
         <Scripts />
       </body>
     </html>

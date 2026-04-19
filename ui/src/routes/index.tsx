@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useMutation } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import { api } from '#/lib/api'
 import { useSSEStatus } from '#/hooks/useSSEStatus'
 import { Badge } from '#/components/ui/badge'
@@ -15,12 +16,30 @@ export const Route = createFileRoute('/')({ component: StatusPage })
 function StatusPage() {
   const { data, connected, error } = useSSEStatus()
 
-  const pause = useMutation({ mutationFn: api.pause })
-  const resume = useMutation({ mutationFn: api.resume })
-  const skip = useMutation({ mutationFn: api.skip })
-  const unpin = useMutation({ mutationFn: api.unpin })
+  const pause = useMutation({
+    mutationFn: api.pause,
+    onSuccess: () => toast.success('Rotation paused'),
+    onError: () => toast.error('Failed to pause'),
+  })
+  const resume = useMutation({
+    mutationFn: api.resume,
+    onSuccess: () => toast.success('Rotation resumed'),
+    onError: () => toast.error('Failed to resume'),
+  })
+  const skip = useMutation({
+    mutationFn: api.skip,
+    onSuccess: () => toast.success('Skipped to next mode'),
+    onError: () => toast.error('Failed to skip'),
+  })
+  const unpin = useMutation({
+    mutationFn: api.unpin,
+    onSuccess: () => toast.success('Unpinned — rotation resumed'),
+    onError: () => toast.error('Failed to unpin'),
+  })
   const force = useMutation({
     mutationFn: (modeID: string) => api.force(modeID),
+    onSuccess: (_data, modeID) => toast.success(`Pinned to ${modeID}`),
+    onError: () => toast.error('Failed to force mode'),
   })
 
   const busy =
