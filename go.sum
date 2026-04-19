@@ -1,5 +1,7 @@
 github.com/go-chi/chi/v5 v5.2.5 h1:Eg4myHZBjyvJmAFjFvWgrqDTXFyOzjj7YIm3L3mu6Ug=
 github.com/go-chi/chi/v5 v5.2.5/go.mod h1:X7Gx4mteadT3eDOMTsXzmI4/rwUpOwBHLpAfupzFJP0=
+github.com/go-chi/cors v1.2.2 h1:Jmey33TE+b+rB7fT8MUy1u0I4L+NARQlK6LhzKPSyQE=
+github.com/go-chi/cors v1.2.2/go.mod h1:sSbTewc+6wYHBBCW7ytsFSn836hqM7JxpglAy2Vzc58=
 github.com/jam941/Vestaboard-Golang v0.0.0-20260419143106-f5f7e4774222 h1:69y4TrCAKUojY46AOveZsXsIxGOJzFNnT1j7FL3qqtM=
 github.com/jam941/Vestaboard-Golang v0.0.0-20260419143106-f5f7e4774222/go.mod h1:ByhWewdGV09k8Wco8ZscMefi1k4P/hTcxfwHp4+30T0=
 github.com/jam941/Vestaboard-Golang v0.1.0 h1:ykCDhx5TScMCLdi/qw7FRA1bn4Se73zZOkWyvBgLirY=
