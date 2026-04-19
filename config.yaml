@@ -1,2 +1,2 @@
-rotation_interval: 5m
+rotation_interval: 1m
 static_text: "HELLO WORLD"
