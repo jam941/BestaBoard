@@ -280,6 +280,17 @@ func (s *Scheduler) DisableMode(id string) bool {
 	return found
 }
 
+func (s *Scheduler) GetMode(id string) (mode.Mode, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, m := range s.modes {
+		if m.ID() == id {
+			return m, true
+		}
+	}
+	return nil, false
+}
+
 // resetInterval signals Start to reset the ticker. Non-blocking — if a reset
 // is already pending it's a no-op (channel is buffered size 1).
 func (s *Scheduler) resetInterval() {

@@ -53,6 +53,20 @@ func main() {
 		mode.NewClockMode(),
 		mode.NewStaticMode(cfg.StaticText),
 	}
+	if cfg.Weather.Latitude != 0 || cfg.Weather.Longitude != 0 {
+		modes = append(modes, mode.NewWeatherMode(mode.WeatherConfig{
+			Latitude:  cfg.Weather.Latitude,
+			Longitude: cfg.Weather.Longitude,
+			Timezone:  cfg.Weather.Timezone,
+			Units:     cfg.Weather.Units,
+		}))
+		slog.Info("weather mode registered",
+			"lat", cfg.Weather.Latitude,
+			"lon", cfg.Weather.Longitude,
+			"timezone", cfg.Weather.Timezone,
+			"units", cfg.Weather.Units,
+		)
+	}
 
 	sched := scheduler.New(modes, cfg.RotationInterval.Duration, pusher, h)
 

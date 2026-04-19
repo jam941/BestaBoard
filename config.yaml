@@ -1,2 +1,8 @@
 rotation_interval: 1m
 static_text: "HELLO WORLD"
+
+weather:
+  latitude: 43.15
+  longitude: -77.61
+  timezone: "America/New_York"
+  units: "fahrenheit"

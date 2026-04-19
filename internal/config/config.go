@@ -12,9 +12,17 @@ const defaultConfigPath = "./config.yaml"
 
 
 type Config struct {
-	RotationInterval Duration `yaml:"rotation_interval"`
+	RotationInterval Duration      `yaml:"rotation_interval"`
+	StaticText       string        `yaml:"static_text"`
+	Weather          WeatherConfig `yaml:"weather"`
+}
 
-	StaticText string `yaml:"static_text"`
+
+type WeatherConfig struct {
+	Latitude  float64 `yaml:"latitude"`
+	Longitude float64 `yaml:"longitude"`
+	Timezone string `yaml:"timezone"`
+	Units string `yaml:"units"`
 }
 
 type Duration struct {
@@ -61,5 +69,9 @@ func defaults() *Config {
 	return &Config{
 		RotationInterval: Duration{5 * time.Minute},
 		StaticText:       "HELLO WORLD",
+		Weather: WeatherConfig{
+			Timezone: "UTC",
+			Units:    "fahrenheit",
+		},
 	}
 }
