@@ -15,6 +15,7 @@ type Config struct {
 	RotationInterval Duration      `yaml:"rotation_interval"`
 	StaticText       string        `yaml:"static_text"`
 	Weather          WeatherConfig `yaml:"weather"`
+	NoteDuration Duration `yaml:"note_duration"`
 }
 
 
@@ -69,6 +70,7 @@ func defaults() *Config {
 	return &Config{
 		RotationInterval: Duration{5 * time.Minute},
 		StaticText:       "HELLO WORLD",
+		NoteDuration:     Duration{15 * time.Minute},
 		Weather: WeatherConfig{
 			Timezone: "UTC",
 			Units:    "fahrenheit",

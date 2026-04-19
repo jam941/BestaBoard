@@ -21,6 +21,15 @@ export type ModeInfo = {
   enabled: boolean
 }
 
+export type BoardNote = {
+  id: number
+  text: string
+  created_at: string
+  expires_at: string
+  dismissed_at: string | null
+  active: boolean
+}
+
 export type Status = {
   current_mode: string
   paused: boolean
@@ -42,4 +51,12 @@ export const api = {
     request<void>(`/modes/${modeID}/disable`, { method: 'POST' }),
   previewMode: (modeID: string) =>
     request<{ id: string; text: string }>(`/modes/${modeID}/preview`),
+  listNotes: () => request<BoardNote[]>('/notes'),
+  createNote: (text: string, durationMinutes: number) =>
+    request<BoardNote>('/notes', {
+      method: 'POST',
+      body: JSON.stringify({ text, duration_minutes: durationMinutes }),
+    }),
+  dismissNote: (id: number) =>
+    request<void>(`/notes/${id}`, { method: 'DELETE' }),
 }

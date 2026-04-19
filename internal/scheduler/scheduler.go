@@ -80,6 +80,7 @@ func (s *Scheduler) tick(ctx context.Context) {
 		slog.Debug("current mode disabled, skipping tick", "mode", m.ID())
 		return
 	}
+	wasPinned := s.pinned
 	s.mu.Unlock()
 
 	if m == nil {
@@ -91,6 +92,13 @@ func (s *Scheduler) tick(ctx context.Context) {
 	if err != nil {
 		if errors.Is(err, mode.ErrNoContent) {
 			slog.Info("mode has no content, skipping", "mode", m.ID())
+			if wasPinned {
+				slog.Info("pinned mode returned no content, unpinning", "mode", m.ID())
+				s.mu.Lock()
+				s.pinned = false
+				s.mu.Unlock()
+				s.broadcast()
+			}
 			return
 		}
 		slog.Error("mode render failed", "mode", m.ID(), "error", err)

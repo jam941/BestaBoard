@@ -10,23 +10,30 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"time"
+
 	"github.com/jam941/bestaboard/internal/hub"
 	"github.com/jam941/bestaboard/internal/mode"
 	"github.com/jam941/bestaboard/internal/scheduler"
+	"github.com/jam941/bestaboard/internal/store"
 )
 
 type Server struct {
-	router    *chi.Mux
-	sched     *scheduler.Scheduler
-	hub       *hub.Hub
-	authToken string
+	router          *chi.Mux
+	sched           *scheduler.Scheduler
+	hub             *hub.Hub
+	store           *store.Store
+	noteDuration    time.Duration
+	authToken       string
 }
 
-func New(sched *scheduler.Scheduler, authToken string, h *hub.Hub) *Server {
+func New(sched *scheduler.Scheduler, authToken string, h *hub.Hub, st *store.Store, noteDuration time.Duration) *Server {
 	s := &Server{
-		sched:     sched,
-		hub:       h,
-		authToken: authToken,
+		sched:        sched,
+		hub:          h,
+		store:        st,
+		noteDuration: noteDuration,
+		authToken:    authToken,
 	}
 
 	r := chi.NewRouter()
@@ -58,6 +65,9 @@ func New(sched *scheduler.Scheduler, authToken string, h *hub.Hub) *Server {
 		r.HandleFunc("/modes/{modeID}/enable", s.handleEnableMode)
 		r.HandleFunc("/modes/{modeID}/disable", s.handleDisableMode)
 		r.Get("/modes/{modeID}/preview", s.handlePreviewMode)
+		r.Post("/notes", s.handleCreateNote)
+		r.Get("/notes", s.handleListNotes)
+		r.Delete("/notes/{noteID}", s.handleDismissNote)
 	})
 
 	s.router = r
@@ -205,6 +215,90 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	}
+}
+
+func (s *Server) handleCreateNote(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Text            string `json:"text"`
+		DurationMinutes int    `json:"duration_minutes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
+	}
+	if strings.TrimSpace(body.Text) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "text is required"})
+		return
+	}
+
+	duration := s.noteDuration
+	if body.DurationMinutes > 0 {
+		duration = time.Duration(body.DurationMinutes) * time.Minute
+	}
+
+	note, err := s.store.CreateNote(body.Text, duration)
+	if err != nil {
+		slog.Error("create note failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create note"})
+		return
+	}
+
+	s.sched.ForceMode(r.Context(), "notes")
+
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"id":         note.ID,
+		"text":       note.Text,
+		"expires_at": note.ExpiresAt.UTC().Format(time.RFC3339),
+	})
+}
+
+func (s *Server) handleListNotes(w http.ResponseWriter, r *http.Request) {
+	notes, err := s.store.RecentNotes(10)
+	if err != nil {
+		slog.Error("list notes failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list notes"})
+		return
+	}
+
+	type noteJSON struct {
+		ID          int64   `json:"id"`
+		Text        string  `json:"text"`
+		CreatedAt   string  `json:"created_at"`
+		ExpiresAt   string  `json:"expires_at"`
+		DismissedAt *string `json:"dismissed_at"`
+		Active      bool    `json:"active"`
+	}
+
+	out := make([]noteJSON, 0, len(notes))
+	for _, n := range notes {
+		nj := noteJSON{
+			ID:        n.ID,
+			Text:      n.Text,
+			CreatedAt: n.CreatedAt.UTC().Format(time.RFC3339),
+			ExpiresAt: n.ExpiresAt.UTC().Format(time.RFC3339),
+			Active:    n.Active(),
+		}
+		if n.DismissedAt != nil {
+			s := n.DismissedAt.UTC().Format(time.RFC3339)
+			nj.DismissedAt = &s
+		}
+		out = append(out, nj)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleDismissNote(w http.ResponseWriter, r *http.Request) {
+	var id int64
+	if _, err := fmt.Sscan(chi.URLParam(r, "noteID"), &id); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid note ID"})
+		return
+	}
+	if err := s.store.DismissNote(id); err != nil {
+		slog.Error("dismiss note failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to dismiss note"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "dismissed"})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

@@ -16,6 +16,7 @@ import (
 	"github.com/jam941/bestaboard/internal/httpapi"
 	"github.com/jam941/bestaboard/internal/mode"
 	"github.com/jam941/bestaboard/internal/scheduler"
+	"github.com/jam941/bestaboard/internal/store"
 )
 
 func main() {
@@ -45,11 +46,24 @@ func main() {
 		slog.Warn("AUTH_TOKEN not set — running without authentication")
 	}
 
+	dbPath := os.Getenv("DB_PATH")
+	if dbPath == "" {
+		dbPath = "./vestad.db"
+	}
+	db, err := store.Open(dbPath)
+	if err != nil {
+		slog.Error("failed to open database", "path", dbPath, "error", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+	slog.Info("database opened", "path", dbPath)
+
 	pusher := board.NewPusher(client)
 
 	h := hub.New()
 
 	modes := []mode.Mode{
+		mode.NewNoteMode(db),
 		mode.NewClockMode(),
 		mode.NewStaticMode(cfg.StaticText),
 	}
@@ -71,7 +85,7 @@ func main() {
 	sched := scheduler.New(modes, cfg.RotationInterval.Duration, pusher, h)
 
 	// HTTP server — runs alongside the scheduler.
-	apiServer := httpapi.New(sched, authToken, h)
+	apiServer := httpapi.New(sched, authToken, h, db, cfg.NoteDuration.Duration)
 	httpServer := &http.Server{
 		Addr:    ":8080",
 		Handler: apiServer.Handler(),
