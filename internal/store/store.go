@@ -50,6 +50,17 @@ func (s *Store) migrate() error {
 			user_id    BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 			expires_at BIGINT NOT NULL
 		);
+		CREATE TABLE IF NOT EXISTS preferences (
+			id                INT              PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+			rotation_interval TEXT             NOT NULL DEFAULT '1m',
+			static_text       TEXT             NOT NULL DEFAULT 'HELLO WORLD',
+			weather_latitude  DOUBLE PRECISION NOT NULL DEFAULT 43.15,
+			weather_longitude DOUBLE PRECISION NOT NULL DEFAULT -77.61,
+			weather_timezone  TEXT             NOT NULL DEFAULT 'America/New_York',
+			weather_units     TEXT             NOT NULL DEFAULT 'fahrenheit',
+			note_duration     TEXT             NOT NULL DEFAULT '15m'
+		);
+		INSERT INTO preferences (id) VALUES (1) ON CONFLICT DO NOTHING;
 	`)
 	return err
 }
@@ -226,6 +237,51 @@ func (s *Store) ValidateSession(token string) bool {
 
 func (s *Store) DeleteSession(token string) error {
 	_, err := s.db.Exec("DELETE FROM sessions WHERE token = $1", token)
+	return err
+}
+
+// ---- Preferences ----
+
+type Preferences struct {
+	RotationInterval string  `json:"rotation_interval"`
+	StaticText       string  `json:"static_text"`
+	WeatherLatitude  float64 `json:"weather_latitude"`
+	WeatherLongitude float64 `json:"weather_longitude"`
+	WeatherTimezone  string  `json:"weather_timezone"`
+	WeatherUnits     string  `json:"weather_units"`
+	NoteDuration     string  `json:"note_duration"`
+}
+
+func (s *Store) GetPreferences() (*Preferences, error) {
+	var p Preferences
+	err := s.db.QueryRow(`
+		SELECT rotation_interval, static_text,
+		       weather_latitude, weather_longitude, weather_timezone, weather_units,
+		       note_duration
+		FROM preferences WHERE id = 1
+	`).Scan(
+		&p.RotationInterval, &p.StaticText,
+		&p.WeatherLatitude, &p.WeatherLongitude, &p.WeatherTimezone, &p.WeatherUnits,
+		&p.NoteDuration,
+	)
+	return &p, err
+}
+
+func (s *Store) UpdatePreferences(p *Preferences) error {
+	_, err := s.db.Exec(`
+		UPDATE preferences SET
+			rotation_interval = $1,
+			static_text       = $2,
+			weather_latitude  = $3,
+			weather_longitude = $4,
+			weather_timezone  = $5,
+			weather_units     = $6,
+			note_duration     = $7
+		WHERE id = 1
+	`, p.RotationInterval, p.StaticText,
+		p.WeatherLatitude, p.WeatherLongitude, p.WeatherTimezone, p.WeatherUnits,
+		p.NoteDuration,
+	)
 	return err
 }
 

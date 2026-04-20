@@ -308,6 +308,14 @@ func (s *Scheduler) resetInterval() {
 	}
 }
 
+func (s *Scheduler) SetInterval(d time.Duration) {
+	s.mu.Lock()
+	s.interval = d
+	s.mu.Unlock()
+	s.resetInterval()
+	slog.Info("scheduler interval updated", "interval", d)
+}
+
 func (s *Scheduler) Unpin() {
 	s.mu.Lock()
 	s.pinned = false
