@@ -19,27 +19,25 @@ import (
 )
 
 type Server struct {
-	router          *chi.Mux
-	sched           *scheduler.Scheduler
-	hub             *hub.Hub
-	store           *store.Store
-	noteDuration    time.Duration
-	authToken       string
+	router       *chi.Mux
+	sched        *scheduler.Scheduler
+	hub          *hub.Hub
+	store        *store.Store
+	noteDuration time.Duration
 }
 
-func New(sched *scheduler.Scheduler, authToken string, h *hub.Hub, st *store.Store, noteDuration time.Duration) *Server {
+func New(sched *scheduler.Scheduler, h *hub.Hub, st *store.Store, noteDuration time.Duration) *Server {
 	s := &Server{
 		sched:        sched,
 		hub:          h,
 		store:        st,
 		noteDuration: noteDuration,
-		authToken:    authToken,
 	}
 
 	r := chi.NewRouter()
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"*"},
-		AllowedMethods:   []string{"GET", "POST", "OPTIONS"},
+		AllowedMethods:   []string{"GET", "POST", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Authorization", "Content-Type"},
 		AllowCredentials: false,
 		MaxAge:           300,
@@ -51,11 +49,13 @@ func New(sched *scheduler.Scheduler, authToken string, h *hub.Hub, st *store.Sto
 
 	// Public — no auth.
 	r.Get("/health", s.handleHealth)
-	r.Get("/events", s.handleEvents) // SSE stream — read-only, no auth needed
+	r.Get("/events", s.handleEvents)
+	r.Post("/login", s.handleLogin)
 
-	// Protected — bearer token required.
+	// Protected — session token required.
 	r.Group(func(r chi.Router) {
 		r.Use(s.bearerAuth)
+		r.Post("/logout", s.handleLogout)
 		r.Get("/status", s.handleStatus)
 		r.HandleFunc("/pause", s.handlePause)
 		r.HandleFunc("/resume", s.handleResume)
@@ -88,19 +88,50 @@ func logRequests(next http.Handler) http.Handler {
 
 func (s *Server) bearerAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// No token configured → auth disabled (local dev mode).
-		if s.authToken == "" {
-			next.ServeHTTP(w, r)
-			return
-		}
 		auth := r.Header.Get("Authorization")
 		token, found := strings.CutPrefix(auth, "Bearer ")
-		if !found || token != s.authToken {
+		if !found || !s.store.ValidateSession(token) {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
+	}
+	user, err := s.store.AuthenticateUser(body.Username, body.Password)
+	if err != nil {
+		slog.Error("authenticate user failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		return
+	}
+	if user == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
+		return
+	}
+	token, err := s.store.CreateSession(user.ID)
+	if err != nil {
+		slog.Error("create session failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"token": token})
+}
+
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if err := s.store.DeleteSession(token); err != nil {
+		slog.Error("delete session failed", "error", err)
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "logged out"})
 }
 
 

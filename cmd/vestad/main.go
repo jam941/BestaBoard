@@ -41,22 +41,27 @@ func main() {
 	}
 	client := vestaboard.NewNote(token)
 
-	authToken := os.Getenv("AUTH_TOKEN")
-	if authToken == "" {
-		slog.Warn("AUTH_TOKEN not set — running without authentication")
+	connStr := os.Getenv("DATABASE_URL")
+	if connStr == "" {
+		slog.Error("DATABASE_URL env var is required")
+		os.Exit(1)
 	}
-
-	dbPath := os.Getenv("DB_PATH")
-	if dbPath == "" {
-		dbPath = "./vestad.db"
-	}
-	db, err := store.Open(dbPath)
+	db, err := store.Open(connStr)
 	if err != nil {
-		slog.Error("failed to open database", "path", dbPath, "error", err)
+		slog.Error("failed to open database", "error", err)
 		os.Exit(1)
 	}
 	defer db.Close()
-	slog.Info("database opened", "path", dbPath)
+	slog.Info("database opened")
+
+	adminUser := os.Getenv("ADMIN_USER")
+	adminPass := os.Getenv("ADMIN_PASSWORD")
+	if adminUser != "" && adminPass != "" {
+		if err := db.SeedAdminIfEmpty(adminUser, adminPass); err != nil {
+			slog.Error("failed to seed admin user", "error", err)
+			os.Exit(1)
+		}
+	}
 
 	pusher := board.NewPusher(client)
 
@@ -85,7 +90,7 @@ func main() {
 	sched := scheduler.New(modes, cfg.RotationInterval.Duration, pusher, h)
 
 	// HTTP server — runs alongside the scheduler.
-	apiServer := httpapi.New(sched, authToken, h, db, cfg.NoteDuration.Duration)
+	apiServer := httpapi.New(sched, h, db, cfg.NoteDuration.Duration)
 	httpServer := &http.Server{
 		Addr:    ":8080",
 		Handler: apiServer.Handler(),
