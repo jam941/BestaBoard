@@ -11,7 +11,6 @@ import (
 
 	"github.com/jam941/Vestaboard-Golang/vestaboard"
 	"github.com/jam941/bestaboard/internal/board"
-	"github.com/jam941/bestaboard/internal/config"
 	"github.com/jam941/bestaboard/internal/hub"
 	"github.com/jam941/bestaboard/internal/httpapi"
 	"github.com/jam941/bestaboard/internal/mode"
@@ -24,16 +23,6 @@ func main() {
 		Level: slog.LevelInfo,
 	})))
 
-	cfg, err := config.Load()
-	if err != nil {
-		slog.Error("failed to load config", "error", err)
-		os.Exit(1)
-	}
-	slog.Info("config loaded",
-		"rotation_interval", cfg.RotationInterval.Duration,
-		"static_text", cfg.StaticText,
-	)
-
 	token := os.Getenv("VBOARD_TOKEN")
 	if token == "" {
 		slog.Error("VBOARD_TOKEN env var is required")
@@ -41,51 +30,69 @@ func main() {
 	}
 	client := vestaboard.NewNote(token)
 
-	authToken := os.Getenv("AUTH_TOKEN")
-	if authToken == "" {
-		slog.Warn("AUTH_TOKEN not set — running without authentication")
+	connStr := os.Getenv("DATABASE_URL")
+	if connStr == "" {
+		slog.Error("DATABASE_URL env var is required")
+		os.Exit(1)
 	}
-
-	dbPath := os.Getenv("DB_PATH")
-	if dbPath == "" {
-		dbPath = "./vestad.db"
-	}
-	db, err := store.Open(dbPath)
+	db, err := store.Open(connStr)
 	if err != nil {
-		slog.Error("failed to open database", "path", dbPath, "error", err)
+		slog.Error("failed to open database", "error", err)
 		os.Exit(1)
 	}
 	defer db.Close()
-	slog.Info("database opened", "path", dbPath)
+	slog.Info("database opened")
+
+	adminUser := os.Getenv("ADMIN_USER")
+	adminPass := os.Getenv("ADMIN_PASSWORD")
+	if adminUser != "" && adminPass != "" {
+		if err := db.SeedAdminIfEmpty(adminUser, adminPass); err != nil {
+			slog.Error("failed to seed admin user", "error", err)
+			os.Exit(1)
+		}
+	}
+
+	prefs, err := db.GetPreferences()
+	if err != nil {
+		slog.Error("failed to load preferences", "error", err)
+		os.Exit(1)
+	}
+
+	rotationInterval, err := time.ParseDuration(prefs.RotationInterval)
+	if err != nil || rotationInterval <= 0 {
+		rotationInterval = time.Minute
+	}
 
 	pusher := board.NewPusher(client)
-
 	h := hub.New()
+
+	getPrefs := func() *store.Preferences {
+		p, err := db.GetPreferences()
+		if err != nil {
+			slog.Warn("failed to read preferences, using last known", "error", err)
+			return prefs
+		}
+		return p
+	}
 
 	modes := []mode.Mode{
 		mode.NewNoteMode(db),
 		mode.NewClockMode(),
-		mode.NewStaticMode(cfg.StaticText),
-	}
-	if cfg.Weather.Latitude != 0 || cfg.Weather.Longitude != 0 {
-		modes = append(modes, mode.NewWeatherMode(mode.WeatherConfig{
-			Latitude:  cfg.Weather.Latitude,
-			Longitude: cfg.Weather.Longitude,
-			Timezone:  cfg.Weather.Timezone,
-			Units:     cfg.Weather.Units,
-		}))
-		slog.Info("weather mode registered",
-			"lat", cfg.Weather.Latitude,
-			"lon", cfg.Weather.Longitude,
-			"timezone", cfg.Weather.Timezone,
-			"units", cfg.Weather.Units,
-		)
+		mode.NewStaticMode(func() string { return getPrefs().StaticText }),
+		mode.NewWeatherMode(func() mode.WeatherConfig {
+			p := getPrefs()
+			return mode.WeatherConfig{
+				Latitude:  p.WeatherLatitude,
+				Longitude: p.WeatherLongitude,
+				Timezone:  p.WeatherTimezone,
+				Units:     p.WeatherUnits,
+			}
+		}),
 	}
 
-	sched := scheduler.New(modes, cfg.RotationInterval.Duration, pusher, h)
+	sched := scheduler.New(modes, rotationInterval, pusher, h)
 
-	// HTTP server — runs alongside the scheduler.
-	apiServer := httpapi.New(sched, authToken, h, db, cfg.NoteDuration.Duration)
+	apiServer := httpapi.New(sched, h, db)
 	httpServer := &http.Server{
 		Addr:    ":8080",
 		Handler: apiServer.Handler(),

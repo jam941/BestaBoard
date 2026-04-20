@@ -1,8 +1,8 @@
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, Navigate } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { toast } from 'sonner'
-import { api } from '#/lib/api'
+import { api, type Preferences } from '#/lib/api'
 import { useSSEStatus } from '#/hooks/useSSEStatus'
 import { Badge } from '#/components/ui/badge'
 import {
@@ -22,6 +22,10 @@ const DURATION_OPTIONS = [
 ]
 
 function StatusPage() {
+  if (typeof window !== 'undefined' && !localStorage.getItem('auth_token')) {
+    return <Navigate to="/login" replace />
+  }
+
   const { data, error } = useSSEStatus()
   const [previewText, setPreviewText] = useState<Record<string, string>>({})
   const [noteText, setNoteText] = useState('')
@@ -87,6 +91,35 @@ function StatusPage() {
       queryClient.invalidateQueries({ queryKey: ['notes'] })
     },
     onError: () => toast.error('Failed to dismiss note'),
+  })
+
+  const { data: prefsData } = useQuery({
+    queryKey: ['preferences'],
+    queryFn: api.getPreferences,
+  })
+  const [prefs, setPrefs] = useState<Preferences | null>(null)
+  useEffect(() => { if (prefsData) setPrefs(prefsData) }, [prefsData])
+
+  const savePrefs = useMutation({
+    mutationFn: (p: Preferences) => api.updatePreferences(p),
+    onSuccess: (updated) => {
+      setPrefs(updated)
+      queryClient.setQueryData(['preferences'], updated)
+      toast.success('Preferences saved')
+    },
+    onError: () => toast.error('Failed to save preferences'),
+  })
+
+  const [newUsername, setNewUsername] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const createUser = useMutation({
+    mutationFn: () => api.createUser(newUsername, newPassword),
+    onSuccess: () => {
+      toast.success(`User "${newUsername}" created`)
+      setNewUsername('')
+      setNewPassword('')
+    },
+    onError: () => toast.error('Failed to create user — username may already exist'),
   })
 
   const previewMode = useMutation({
@@ -338,6 +371,149 @@ function StatusPage() {
               ))}
             </div>
           )}
+        </CardContent>
+      </Card>
+      {/* Preferences */}
+      {prefs && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Preferences</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault()
+                savePrefs.mutate(prefs)
+              }}
+              className="space-y-3"
+            >
+              <div className="grid grid-cols-2 gap-3">
+                <label className="space-y-1">
+                  <span className="text-xs text-muted-foreground">Rotation interval</span>
+                  <input
+                    type="text"
+                    value={prefs.rotation_interval}
+                    onChange={(e) => setPrefs({ ...prefs, rotation_interval: e.target.value })}
+                    placeholder="e.g. 1m"
+                    className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                  />
+                </label>
+                <label className="space-y-1">
+                  <span className="text-xs text-muted-foreground">Default note duration</span>
+                  <input
+                    type="text"
+                    value={prefs.note_duration}
+                    onChange={(e) => setPrefs({ ...prefs, note_duration: e.target.value })}
+                    placeholder="e.g. 15m"
+                    className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                  />
+                </label>
+              </div>
+              <label className="block space-y-1">
+                <span className="text-xs text-muted-foreground">Static text</span>
+                <input
+                  type="text"
+                  value={prefs.static_text}
+                  onChange={(e) => setPrefs({ ...prefs, static_text: e.target.value })}
+                  className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                />
+              </label>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="space-y-1">
+                  <span className="text-xs text-muted-foreground">Weather latitude</span>
+                  <input
+                    type="number"
+                    step="any"
+                    value={prefs.weather_latitude}
+                    onChange={(e) => setPrefs({ ...prefs, weather_latitude: parseFloat(e.target.value) })}
+                    className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                  />
+                </label>
+                <label className="space-y-1">
+                  <span className="text-xs text-muted-foreground">Weather longitude</span>
+                  <input
+                    type="number"
+                    step="any"
+                    value={prefs.weather_longitude}
+                    onChange={(e) => setPrefs({ ...prefs, weather_longitude: parseFloat(e.target.value) })}
+                    className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                  />
+                </label>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="space-y-1">
+                  <span className="text-xs text-muted-foreground">Timezone</span>
+                  <input
+                    type="text"
+                    value={prefs.weather_timezone}
+                    onChange={(e) => setPrefs({ ...prefs, weather_timezone: e.target.value })}
+                    placeholder="e.g. America/New_York"
+                    className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                  />
+                </label>
+                <label className="space-y-1">
+                  <span className="text-xs text-muted-foreground">Temperature units</span>
+                  <select
+                    value={prefs.weather_units}
+                    onChange={(e) => setPrefs({ ...prefs, weather_units: e.target.value })}
+                    className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                  >
+                    <option value="fahrenheit">Fahrenheit</option>
+                    <option value="celsius">Celsius</option>
+                  </select>
+                </label>
+              </div>
+              <button
+                type="submit"
+                disabled={savePrefs.isPending}
+                className="w-full rounded-md border px-3 py-2 text-sm font-medium disabled:opacity-40 hover:bg-muted transition-colors"
+              >
+                {savePrefs.isPending ? 'Saving…' : 'Save preferences'}
+              </button>
+            </form>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Users */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Create User</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              createUser.mutate()
+            }}
+            className="space-y-3"
+          >
+            <input
+              type="text"
+              placeholder="Username"
+              value={newUsername}
+              onChange={(e) => setNewUsername(e.target.value)}
+              autoComplete="off"
+              required
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+            />
+            <input
+              type="password"
+              placeholder="Password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              autoComplete="new-password"
+              required
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+            />
+            <button
+              type="submit"
+              disabled={createUser.isPending}
+              className="w-full rounded-md border px-3 py-2 text-sm font-medium disabled:opacity-40 hover:bg-muted transition-colors"
+            >
+              {createUser.isPending ? 'Creating…' : 'Create user'}
+            </button>
+          </form>
         </CardContent>
       </Card>
     </main>

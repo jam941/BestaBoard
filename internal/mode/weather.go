@@ -17,18 +17,18 @@ import (
 type WeatherConfig struct {
 	Latitude  float64
 	Longitude float64
-	Timezone string
+	Timezone  string
 	// Units is "fahrenheit" or "celsius".
 	Units string
 }
 
-
 type WeatherMode struct {
-	cfg      WeatherConfig
-	mu       sync.Mutex
-	cached   *weatherData
-	cacheTTL time.Duration
-	client   *http.Client
+	getConfig func() WeatherConfig
+	mu        sync.Mutex
+	cached    *weatherData
+	lastCfg   WeatherConfig
+	cacheTTL  time.Duration
+	client    *http.Client
 }
 
 type weatherData struct {
@@ -38,38 +38,34 @@ type weatherData struct {
 }
 
 type dailyForecast struct {
-	high        int
-	low         int
-	precipProb  int    // 0-100 percent
-	condition   string // short label derived from WMO weather code
+	high       int
+	low        int
+	precipProb int    // 0-100 percent
+	condition  string // short label derived from WMO weather code
 }
 
-func NewWeatherMode(cfg WeatherConfig) *WeatherMode {
-	if cfg.Timezone == "" {
-		cfg.Timezone = "UTC"
-	}
-	if cfg.Units == "" {
-		cfg.Units = "fahrenheit"
-	}
+func NewWeatherMode(getConfig func() WeatherConfig) *WeatherMode {
 	return &WeatherMode{
-		cfg:      cfg,
-		cacheTTL: 10 * time.Minute,
-		client:   &http.Client{Timeout: 10 * time.Second},
+		getConfig: getConfig,
+		cacheTTL:  10 * time.Minute,
+		client:    &http.Client{Timeout: 10 * time.Second},
 	}
 }
 
 func (m *WeatherMode) ID() string { return "weather" }
 
 func (m *WeatherMode) Render(ctx context.Context) (vestaboard.BoardLayout, error) {
-	data, err := m.getData(ctx)
+	cfg := m.getConfig()
+
+	data, err := m.getData(ctx, cfg)
 	if err != nil {
 		slog.Error("weather: fetch failed, skipping", "error", err)
 		return nil, ErrNoContent
 	}
 
-	loc, err := time.LoadLocation(m.cfg.Timezone)
+	loc, err := time.LoadLocation(cfg.Timezone)
 	if err != nil {
-		slog.Warn("weather: unknown timezone, falling back to UTC", "timezone", m.cfg.Timezone)
+		slog.Warn("weather: unknown timezone, falling back to UTC", "timezone", cfg.Timezone)
 		loc = time.UTC
 	}
 	now := time.Now().In(loc)
@@ -85,7 +81,7 @@ func (m *WeatherMode) Render(ctx context.Context) (vestaboard.BoardLayout, error
 	}
 
 	unitSuffix := "F"
-	if m.cfg.Units == "celsius" {
+	if cfg.Units == "celsius" {
 		unitSuffix = "C"
 	}
 
@@ -102,27 +98,38 @@ func (m *WeatherMode) Render(ctx context.Context) (vestaboard.BoardLayout, error
 // Open-Meteo JSON response shape (only the fields we care about).
 type openMeteoResponse struct {
 	Daily struct {
-		TemperatureMax     []float64 `json:"temperature_2m_max"`
-		TemperatureMin     []float64 `json:"temperature_2m_min"`
-		PrecipProbMax      []int     `json:"precipitation_probability_max"`
-		WeatherCode        []int     `json:"weather_code"`
+		TemperatureMax []float64 `json:"temperature_2m_max"`
+		TemperatureMin []float64 `json:"temperature_2m_min"`
+		PrecipProbMax  []int     `json:"precipitation_probability_max"`
+		WeatherCode    []int     `json:"weather_code"`
 	} `json:"daily"`
 }
 
-func (m *WeatherMode) getData(ctx context.Context) (*weatherData, error) {
+func (m *WeatherMode) getData(ctx context.Context, cfg WeatherConfig) (*weatherData, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.cached != nil && time.Since(m.cached.fetchedAt) < m.cacheTTL {
+	// Bust cache if config changed.
+	if m.cached != nil && cfg == m.lastCfg && time.Since(m.cached.fetchedAt) < m.cacheTTL {
 		return m.cached, nil
+	}
+	m.lastCfg = cfg
+
+	timezone := cfg.Timezone
+	if timezone == "" {
+		timezone = "UTC"
+	}
+	units := cfg.Units
+	if units == "" {
+		units = "fahrenheit"
 	}
 
 	params := url.Values{
-		"latitude":         {fmt.Sprintf("%g", m.cfg.Latitude)},
-		"longitude":        {fmt.Sprintf("%g", m.cfg.Longitude)},
+		"latitude":         {fmt.Sprintf("%g", cfg.Latitude)},
+		"longitude":        {fmt.Sprintf("%g", cfg.Longitude)},
 		"daily":            {"temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code"},
-		"temperature_unit": {m.cfg.Units},
-		"timezone":         {m.cfg.Timezone},
+		"temperature_unit": {units},
+		"timezone":         {timezone},
 		"forecast_days":    {"2"},
 	}
 	apiURL := "https://api.open-meteo.com/v1/forecast?" + params.Encode()

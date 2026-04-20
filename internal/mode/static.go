@@ -8,22 +8,23 @@ import (
 )
 
 type StaticMode struct {
-	text string
+	getText func() string
 }
 
-func NewStaticMode(text string) *StaticMode {
-	return &StaticMode{text: text}
+func NewStaticMode(getText func() string) *StaticMode {
+	return &StaticMode{getText: getText}
 }
 
 func (m *StaticMode) ID() string { return "static" }
 
 func (m *StaticMode) Render(_ context.Context) (vestaboard.BoardLayout, error) {
-	if strings.TrimSpace(m.text) == "" {
+	text := m.getText()
+	if strings.TrimSpace(text) == "" {
 		return nil, ErrNoContent
 	}
 
 	layout := BlankLayout()
-	rows := wrapWords(strings.ToUpper(m.text), 15, 3)
+	rows := wrapWords(strings.ToUpper(text), 15, 3)
 	for i, row := range rows {
 		if i >= 3 {
 			break

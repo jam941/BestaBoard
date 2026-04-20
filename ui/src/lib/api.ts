@@ -1,15 +1,24 @@
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8080'
-const AUTH_TOKEN = import.meta.env.VITE_AUTH_TOKEN ?? ''
+
+function getToken(): string {
+  if (typeof window === 'undefined') return ''
+  return localStorage.getItem('auth_token') ?? ''
+}
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const token = getToken()
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...(AUTH_TOKEN ? { Authorization: `Bearer ${AUTH_TOKEN}` } : {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
   }
 
   const res = await fetch(`${API_URL}${path}`, { ...options, headers })
 
   if (!res.ok) {
+    if (res.status === 401 && typeof window !== 'undefined') {
+      localStorage.removeItem('auth_token')
+      window.location.href = '/login'
+    }
     throw new Error(`${res.status} ${res.statusText}`)
   }
 
@@ -38,6 +47,15 @@ export type Status = {
 }
 
 export const api = {
+  login: (username: string, password: string) =>
+    request<{ token: string }>('/login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    }),
+  logout: async () => {
+    await request<void>('/logout', { method: 'POST' }).catch(() => {})
+    if (typeof window !== 'undefined') localStorage.removeItem('auth_token')
+  },
   status: () => request<Status>('/status'),
   pause: () => request<void>('/pause', { method: 'POST' }),
   resume: () => request<void>('/resume', { method: 'POST' }),
@@ -59,4 +77,25 @@ export const api = {
     }),
   dismissNote: (id: number) =>
     request<void>(`/notes/${id}`, { method: 'DELETE' }),
+  createUser: (username: string, password: string) =>
+    request<{ username: string }>('/users', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    }),
+  getPreferences: () => request<Preferences>('/preferences'),
+  updatePreferences: (prefs: Preferences) =>
+    request<Preferences>('/preferences', {
+      method: 'PATCH',
+      body: JSON.stringify(prefs),
+    }),
+}
+
+export type Preferences = {
+  rotation_interval: string
+  static_text: string
+  weather_latitude: number
+  weather_longitude: number
+  weather_timezone: string
+  weather_units: string
+  note_duration: string
 }
