@@ -19,27 +19,23 @@ import (
 )
 
 type Server struct {
-	router          *chi.Mux
-	sched           *scheduler.Scheduler
-	hub             *hub.Hub
-	store           *store.Store
-	noteDuration    time.Duration
-	authToken       string
+	router *chi.Mux
+	sched  *scheduler.Scheduler
+	hub    *hub.Hub
+	store  *store.Store
 }
 
-func New(sched *scheduler.Scheduler, authToken string, h *hub.Hub, st *store.Store, noteDuration time.Duration) *Server {
+func New(sched *scheduler.Scheduler, h *hub.Hub, st *store.Store) *Server {
 	s := &Server{
-		sched:        sched,
-		hub:          h,
-		store:        st,
-		noteDuration: noteDuration,
-		authToken:    authToken,
+		sched: sched,
+		hub:   h,
+		store: st,
 	}
 
 	r := chi.NewRouter()
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"*"},
-		AllowedMethods:   []string{"GET", "POST", "OPTIONS"},
+		AllowedMethods:   []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Authorization", "Content-Type"},
 		AllowCredentials: false,
 		MaxAge:           300,
@@ -51,11 +47,13 @@ func New(sched *scheduler.Scheduler, authToken string, h *hub.Hub, st *store.Sto
 
 	// Public — no auth.
 	r.Get("/health", s.handleHealth)
-	r.Get("/events", s.handleEvents) // SSE stream — read-only, no auth needed
+	r.Get("/events", s.handleEvents)
+	r.Post("/login", s.handleLogin)
 
-	// Protected — bearer token required.
+	// Protected — session token required.
 	r.Group(func(r chi.Router) {
 		r.Use(s.bearerAuth)
+		r.Post("/logout", s.handleLogout)
 		r.Get("/status", s.handleStatus)
 		r.HandleFunc("/pause", s.handlePause)
 		r.HandleFunc("/resume", s.handleResume)
@@ -68,6 +66,9 @@ func New(sched *scheduler.Scheduler, authToken string, h *hub.Hub, st *store.Sto
 		r.Post("/notes", s.handleCreateNote)
 		r.Get("/notes", s.handleListNotes)
 		r.Delete("/notes/{noteID}", s.handleDismissNote)
+		r.Post("/users", s.handleCreateUser)
+		r.Get("/preferences", s.handleGetPreferences)
+		r.Patch("/preferences", s.handleUpdatePreferences)
 	})
 
 	s.router = r
@@ -88,19 +89,50 @@ func logRequests(next http.Handler) http.Handler {
 
 func (s *Server) bearerAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// No token configured → auth disabled (local dev mode).
-		if s.authToken == "" {
-			next.ServeHTTP(w, r)
-			return
-		}
 		auth := r.Header.Get("Authorization")
 		token, found := strings.CutPrefix(auth, "Bearer ")
-		if !found || token != s.authToken {
+		if !found || !s.store.ValidateSession(token) {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
+	}
+	user, err := s.store.AuthenticateUser(body.Username, body.Password)
+	if err != nil {
+		slog.Error("authenticate user failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		return
+	}
+	if user == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
+		return
+	}
+	token, err := s.store.CreateSession(user.ID)
+	if err != nil {
+		slog.Error("create session failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"token": token})
+}
+
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if err := s.store.DeleteSession(token); err != nil {
+		slog.Error("delete session failed", "error", err)
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "logged out"})
 }
 
 
@@ -231,7 +263,12 @@ func (s *Server) handleCreateNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	duration := s.noteDuration
+	duration := 15 * time.Minute
+	if prefs, err := s.store.GetPreferences(); err == nil {
+		if d, err := time.ParseDuration(prefs.NoteDuration); err == nil && d > 0 {
+			duration = d
+		}
+	}
 	if body.DurationMinutes > 0 {
 		duration = time.Duration(body.DurationMinutes) * time.Minute
 	}
@@ -299,6 +336,66 @@ func (s *Server) handleDismissNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "dismissed"})
+}
+
+func (s *Server) handleGetPreferences(w http.ResponseWriter, r *http.Request) {
+	prefs, err := s.store.GetPreferences()
+	if err != nil {
+		slog.Error("get preferences failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load preferences"})
+		return
+	}
+	writeJSON(w, http.StatusOK, prefs)
+}
+
+func (s *Server) handleUpdatePreferences(w http.ResponseWriter, r *http.Request) {
+	prefs, err := s.store.GetPreferences()
+	if err != nil {
+		slog.Error("get preferences failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load preferences"})
+		return
+	}
+	if err := json.NewDecoder(r.Body).Decode(prefs); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
+	}
+	interval, err := time.ParseDuration(prefs.RotationInterval)
+	if err != nil || interval <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid rotation_interval"})
+		return
+	}
+	if _, err := time.ParseDuration(prefs.NoteDuration); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid note_duration"})
+		return
+	}
+	if err := s.store.UpdatePreferences(prefs); err != nil {
+		slog.Error("update preferences failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save preferences"})
+		return
+	}
+	s.sched.SetInterval(interval)
+	writeJSON(w, http.StatusOK, prefs)
+}
+
+func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
+	}
+	if strings.TrimSpace(body.Username) == "" || body.Password == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username and password are required"})
+		return
+	}
+	if err := s.store.CreateUser(body.Username, body.Password); err != nil {
+		slog.Error("create user failed", "error", err)
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "username already exists"})
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"username": body.Username})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

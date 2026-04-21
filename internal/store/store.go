@@ -1,27 +1,28 @@
-// Package store provides a SQLite-backed store for board notes.
+// Package store provides a Postgres-backed store for board data.
 package store
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"time"
 
-	_ "modernc.org/sqlite"
+	_ "github.com/jackc/pgx/v5/stdlib"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type Store struct {
 	db *sql.DB
 }
 
-func Open(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path)
+func Open(connStr string) (*Store, error) {
+	db, err := sql.Open("pgx", connStr)
 	if err != nil {
-		return nil, fmt.Errorf("open sqlite %q: %w", path, err)
+		return nil, fmt.Errorf("open postgres: %w", err)
 	}
-	db.SetMaxOpenConns(1)
-
 	if err := db.Ping(); err != nil {
-		return nil, fmt.Errorf("ping sqlite: %w", err)
+		return nil, fmt.Errorf("ping postgres: %w", err)
 	}
 	s := &Store{db: db}
 	if err := s.migrate(); err != nil {
@@ -33,15 +34,38 @@ func Open(path string) (*Store, error) {
 func (s *Store) migrate() error {
 	_, err := s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS notes (
-			id           INTEGER PRIMARY KEY AUTOINCREMENT,
-			text         TEXT    NOT NULL,
-			created_at   INTEGER NOT NULL,
-			expires_at   INTEGER NOT NULL,
-			dismissed_at INTEGER
-		)
+			id           BIGSERIAL PRIMARY KEY,
+			text         TEXT   NOT NULL,
+			created_at   BIGINT NOT NULL,
+			expires_at   BIGINT NOT NULL,
+			dismissed_at BIGINT
+		);
+		CREATE TABLE IF NOT EXISTS users (
+			id            BIGSERIAL PRIMARY KEY,
+			username      TEXT UNIQUE NOT NULL,
+			password_hash TEXT        NOT NULL
+		);
+		CREATE TABLE IF NOT EXISTS sessions (
+			token      TEXT   PRIMARY KEY,
+			user_id    BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			expires_at BIGINT NOT NULL
+		);
+		CREATE TABLE IF NOT EXISTS preferences (
+			id                INT              PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+			rotation_interval TEXT             NOT NULL DEFAULT '1m',
+			static_text       TEXT             NOT NULL DEFAULT 'HELLO WORLD',
+			weather_latitude  DOUBLE PRECISION NOT NULL DEFAULT 43.15,
+			weather_longitude DOUBLE PRECISION NOT NULL DEFAULT -77.61,
+			weather_timezone  TEXT             NOT NULL DEFAULT 'America/New_York',
+			weather_units     TEXT             NOT NULL DEFAULT 'fahrenheit',
+			note_duration     TEXT             NOT NULL DEFAULT '15m'
+		);
+		INSERT INTO preferences (id) VALUES (1) ON CONFLICT DO NOTHING;
 	`)
 	return err
 }
+
+// ---- Notes ----
 
 type Note struct {
 	ID          int64
@@ -58,14 +82,14 @@ func (n *Note) Active() bool {
 func (s *Store) CreateNote(text string, duration time.Duration) (*Note, error) {
 	now := time.Now()
 	expiresAt := now.Add(duration)
-	res, err := s.db.Exec(
-		"INSERT INTO notes (text, created_at, expires_at) VALUES (?, ?, ?)",
+	var id int64
+	err := s.db.QueryRow(
+		"INSERT INTO notes (text, created_at, expires_at) VALUES ($1, $2, $3) RETURNING id",
 		text, now.Unix(), expiresAt.Unix(),
-	)
+	).Scan(&id)
 	if err != nil {
 		return nil, fmt.Errorf("insert note: %w", err)
 	}
-	id, _ := res.LastInsertId()
 	return &Note{
 		ID:        id,
 		Text:      text,
@@ -79,7 +103,7 @@ func (s *Store) ActiveNote() (*Note, error) {
 	row := s.db.QueryRow(`
 		SELECT id, text, created_at, expires_at
 		FROM notes
-		WHERE expires_at > ? AND dismissed_at IS NULL
+		WHERE expires_at > $1 AND dismissed_at IS NULL
 		ORDER BY created_at DESC
 		LIMIT 1
 	`, now)
@@ -102,7 +126,7 @@ func (s *Store) RecentNotes(limit int) ([]*Note, error) {
 		SELECT id, text, created_at, expires_at, dismissed_at
 		FROM notes
 		ORDER BY created_at DESC
-		LIMIT ?
+		LIMIT $1
 	`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query notes: %w", err)
@@ -130,8 +154,133 @@ func (s *Store) RecentNotes(limit int) ([]*Note, error) {
 
 func (s *Store) DismissNote(id int64) error {
 	_, err := s.db.Exec(
-		"UPDATE notes SET dismissed_at = ? WHERE id = ?",
+		"UPDATE notes SET dismissed_at = $1 WHERE id = $2",
 		time.Now().Unix(), id,
+	)
+	return err
+}
+
+// ---- Users ----
+
+type User struct {
+	ID           int64
+	Username     string
+	PasswordHash string
+}
+
+func (s *Store) CreateUser(username, password string) error {
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("hash password: %w", err)
+	}
+	_, err = s.db.Exec(
+		"INSERT INTO users (username, password_hash) VALUES ($1, $2)",
+		username, string(hash),
+	)
+	return err
+}
+
+// AuthenticateUser verifies credentials and returns the user, or nil if invalid.
+func (s *Store) AuthenticateUser(username, password string) (*User, error) {
+	var u User
+	err := s.db.QueryRow(
+		"SELECT id, username, password_hash FROM users WHERE username = $1", username,
+	).Scan(&u.ID, &u.Username, &u.PasswordHash)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)) != nil {
+		return nil, nil
+	}
+	return &u, nil
+}
+
+// SeedAdminIfEmpty creates the given user only when the users table is empty.
+// Safe to call on every startup — no-ops once any user exists.
+func (s *Store) SeedAdminIfEmpty(username, password string) error {
+	var count int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM users").Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+	return s.CreateUser(username, password)
+}
+
+// ---- Sessions ----
+
+const sessionTTL = 30 * 24 * time.Hour
+
+func (s *Store) CreateSession(userID int64) (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	token := hex.EncodeToString(b)
+	expiresAt := time.Now().Add(sessionTTL).Unix()
+	_, err := s.db.Exec(
+		"INSERT INTO sessions (token, user_id, expires_at) VALUES ($1, $2, $3)",
+		token, userID, expiresAt,
+	)
+	return token, err
+}
+
+func (s *Store) ValidateSession(token string) bool {
+	var expiresAt int64
+	err := s.db.QueryRow("SELECT expires_at FROM sessions WHERE token = $1", token).Scan(&expiresAt)
+	return err == nil && time.Now().Unix() < expiresAt
+}
+
+func (s *Store) DeleteSession(token string) error {
+	_, err := s.db.Exec("DELETE FROM sessions WHERE token = $1", token)
+	return err
+}
+
+// ---- Preferences ----
+
+type Preferences struct {
+	RotationInterval string  `json:"rotation_interval"`
+	StaticText       string  `json:"static_text"`
+	WeatherLatitude  float64 `json:"weather_latitude"`
+	WeatherLongitude float64 `json:"weather_longitude"`
+	WeatherTimezone  string  `json:"weather_timezone"`
+	WeatherUnits     string  `json:"weather_units"`
+	NoteDuration     string  `json:"note_duration"`
+}
+
+func (s *Store) GetPreferences() (*Preferences, error) {
+	var p Preferences
+	err := s.db.QueryRow(`
+		SELECT rotation_interval, static_text,
+		       weather_latitude, weather_longitude, weather_timezone, weather_units,
+		       note_duration
+		FROM preferences WHERE id = 1
+	`).Scan(
+		&p.RotationInterval, &p.StaticText,
+		&p.WeatherLatitude, &p.WeatherLongitude, &p.WeatherTimezone, &p.WeatherUnits,
+		&p.NoteDuration,
+	)
+	return &p, err
+}
+
+func (s *Store) UpdatePreferences(p *Preferences) error {
+	_, err := s.db.Exec(`
+		UPDATE preferences SET
+			rotation_interval = $1,
+			static_text       = $2,
+			weather_latitude  = $3,
+			weather_longitude = $4,
+			weather_timezone  = $5,
+			weather_units     = $6,
+			note_duration     = $7
+		WHERE id = 1
+	`, p.RotationInterval, p.StaticText,
+		p.WeatherLatitude, p.WeatherLongitude, p.WeatherTimezone, p.WeatherUnits,
+		p.NoteDuration,
 	)
 	return err
 }
