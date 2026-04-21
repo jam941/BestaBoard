@@ -6,3 +6,16 @@ weather:
   longitude: -77.61
   timezone: "America/New_York"
   units: "fahrenheit"
+
+# Demo-only: which modes to rotate through (comment out any you don't want)
+modes:
+  - clock
+  - weather
+  - notes
+
+# Demo-only: pre-seeded notes shown in rotation (each with its own display duration)
+notes:
+  - text: "WELCOME TO THE DEMO"
+    duration: 30s
+  - text: "BESTABOARD IS AWESOME"
+    duration: 30s

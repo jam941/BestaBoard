@@ -15,7 +15,14 @@ type Config struct {
 	RotationInterval Duration      `yaml:"rotation_interval"`
 	StaticText       string        `yaml:"static_text"`
 	Weather          WeatherConfig `yaml:"weather"`
-	NoteDuration Duration `yaml:"note_duration"`
+	NoteDuration     Duration      `yaml:"note_duration"`
+	Modes            []string      `yaml:"modes"`
+	Notes            []NoteConfig  `yaml:"notes"`
+}
+
+type NoteConfig struct {
+	Text     string   `yaml:"text"`
+	Duration Duration `yaml:"duration"`
 }
 
 

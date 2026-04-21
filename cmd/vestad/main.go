@@ -11,6 +11,7 @@ import (
 
 	"github.com/jam941/Vestaboard-Golang/vestaboard"
 	"github.com/jam941/bestaboard/internal/board"
+	"github.com/jam941/bestaboard/internal/config"
 	"github.com/jam941/bestaboard/internal/hub"
 	"github.com/jam941/bestaboard/internal/httpapi"
 	"github.com/jam941/bestaboard/internal/mode"
@@ -30,6 +31,106 @@ func main() {
 	}
 	client := vestaboard.NewNote(token)
 
+	ctx, cancel := context.WithCancel(context.Background())
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	if os.Getenv("DEMO") == "true" {
+		runDemo(ctx, cancel, sigCh, client)
+	} else {
+		runProd(ctx, cancel, sigCh, client)
+	}
+}
+
+func runDemo(ctx context.Context, cancel context.CancelFunc, sigCh <-chan os.Signal, client *vestaboard.Client) {
+	cfg, err := config.Load()
+	if err != nil {
+		slog.Error("failed to load config", "error", err)
+		os.Exit(1)
+	}
+	slog.Info("demo mode: config loaded", "modes", cfg.Modes, "notes", len(cfg.Notes))
+
+	pusher := board.NewPusher(client)
+
+	modes := buildDemoModes(cfg)
+	h := hub.New()
+	sched := scheduler.New(modes, cfg.RotationInterval.Duration, pusher, h)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	httpServer := &http.Server{Addr: ":8080", Handler: mux}
+
+	go func() {
+		sig := <-sigCh
+		slog.Info("received signal, shutting down", "signal", sig)
+		cancel()
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			slog.Error("http server shutdown error", "error", err)
+		}
+	}()
+
+	go func() {
+		slog.Info("http server listening (demo)", "addr", httpServer.Addr)
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			slog.Error("http server error", "error", err)
+		}
+	}()
+
+	sched.Start(ctx)
+	pusher.Stop()
+
+	time.Sleep(100 * time.Millisecond)
+	slog.Info("shutdown complete")
+}
+
+func buildDemoModes(cfg *config.Config) []mode.Mode {
+	all := map[string]mode.Mode{
+		"clock": mode.NewClockMode(func() string { return cfg.Weather.Timezone }),
+		"static": mode.NewStaticMode(func() string { return cfg.StaticText }),
+		"weather": mode.NewWeatherMode(func() mode.WeatherConfig {
+			return mode.WeatherConfig{
+				Latitude:  cfg.Weather.Latitude,
+				Longitude: cfg.Weather.Longitude,
+				Timezone:  cfg.Weather.Timezone,
+				Units:     cfg.Weather.Units,
+			}
+		}),
+		"notes": buildDemoNoteMode(cfg),
+	}
+
+	enabled := cfg.Modes
+	if len(enabled) == 0 {
+		enabled = []string{"clock", "weather", "notes", "static"}
+	}
+
+	var modes []mode.Mode
+	for _, id := range enabled {
+		if m, ok := all[id]; ok {
+			modes = append(modes, m)
+		} else {
+			slog.Warn("demo: unknown mode in config, skipping", "mode", id)
+		}
+	}
+	return modes
+}
+
+func buildDemoNoteMode(cfg *config.Config) *mode.DemoNoteMode {
+	notes := make([]mode.DemoNote, len(cfg.Notes))
+	for i, n := range cfg.Notes {
+		d := n.Duration.Duration
+		if d <= 0 {
+			d = cfg.NoteDuration.Duration
+		}
+		notes[i] = mode.DemoNote{Text: n.Text, Duration: d}
+	}
+	return mode.NewDemoNoteMode(notes)
+}
+
+func runProd(ctx context.Context, cancel context.CancelFunc, sigCh <-chan os.Signal, client *vestaboard.Client) {
 	connStr := os.Getenv("DATABASE_URL")
 	if connStr == "" {
 		slog.Error("DATABASE_URL env var is required")
@@ -97,10 +198,6 @@ func main() {
 		Addr:    ":8080",
 		Handler: apiServer.Handler(),
 	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
 		sig := <-sigCh
