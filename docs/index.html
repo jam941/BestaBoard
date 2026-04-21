@@ -166,8 +166,26 @@
     iframe {
       display: block;
       width: 100%;
-      height: 680px;
+      height: 100%;
       border: none;
+      background: transparent;
+    }
+
+    
+    .demo-embed-wrap {
+      width: 100%;
+      position: relative;
+      border-radius: var(--radius);
+      overflow: visible;
+      aspect-ratio: 16 / 6.7;
+      background: transparent;
+    }
+    .demo-embed-wrap iframe {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      background: transparent;
     }
 
     /* ── FEATURES ── */
@@ -325,8 +343,14 @@
 <!-- ── DEMO IFRAME ── -->
 <section id="demo">
   <div class="section-label">Virtual Board — Example Modes</div>
-  <div style="width: 100%; aspect-ratio: 16 / 5.9; border-radius: var(--radius); overflow: hidden; position: relative;">
-    <iframe src="https://digital.vestaboard.com/a2242984V256fV47b8Va1c5V99bacebce35f" title="BestaBoard Live Demo" style="width: 100%; height: 115%; border: none; display: block; position: absolute; top: 0; left: 0;" scrolling="no"></iframe>
+  <div class="demo-embed-wrap">
+    <!-- allowtransparency: legacy hint some embeds use; inner page must also omit an opaque bg -->
+    <iframe
+      src="https://digital.vestaboard.com/a2242984V256fV47b8Va1c5V99bacebce35f"
+      title="BestaBoard Live Demo"
+      scrolling="no"
+      allowtransparency="true"
+    ></iframe>
   </div>
 </section>
 
