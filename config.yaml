@@ -1,4 +1,4 @@
-rotation_interval: 1m
+rotation_interval: 20s
 static_text: "HELLO WORLD"
 
 weather:
