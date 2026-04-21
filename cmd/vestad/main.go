@@ -77,7 +77,7 @@ func main() {
 
 	modes := []mode.Mode{
 		mode.NewNoteMode(db),
-		mode.NewClockMode(),
+		mode.NewClockMode(func() string { return getPrefs().WeatherTimezone }),
 		mode.NewStaticMode(func() string { return getPrefs().StaticText }),
 		mode.NewWeatherMode(func() mode.WeatherConfig {
 			p := getPrefs()
