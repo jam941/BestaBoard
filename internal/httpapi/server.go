@@ -18,6 +18,7 @@ import (
 	"github.com/jam941/bestaboard/internal/store"
 )
 
+
 type Server struct {
 	router *chi.Mux
 	sched  *scheduler.Scheduler
