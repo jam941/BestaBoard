@@ -334,7 +334,7 @@ function StatusPage() {
             <button
               onClick={() => createNote.mutate({ text: noteText, duration: noteDuration })}
               disabled={createNote.isPending || !noteText.trim()}
-              className="rounded-md border px-4 py-1.5 text-sm font-medium disabled:opacity-40 hover:bg-muted transition-colors"
+              className="rounded-md border border-green-600 bg-green-600 px-4 py-1.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-green-700 disabled:opacity-40 dark:border-green-500 dark:bg-green-600 dark:hover:bg-green-700"
             >
               Send
             </button>
